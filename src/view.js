@@ -423,15 +423,15 @@ export class GameView {
     for (let y = vis.y0; y <= vis.y1; y++) {
       for (let x = vis.x0; x <= vis.x1; x++) this.drawTile(ctx, x, y);
     }
-    this.washLand(ctx, g, vis);
-    this.washSea(ctx, g, vis);
+    this.markChannelGale(ctx, g, vis);
     blitCoast(ctx, coastOf(g.map), this.cam, this.vw, this.vh);
   }
 
   // The relief is the board. Square fills stay hidden so the picture shows.
   // G draws them back at half strength, with the smooth shore, when the
   // movement colors are what you need. Out of play, beaches, roads, and the
-  // sea edge stay marked on the photograph itself.
+  // sea edge stay marked on the photograph itself. A gale still darkens only
+  // the Channel crossing, on top of whichever board is showing.
   paintBoard(ctx, g, vis, board) {
     drawBoardImage(ctx, g.map, board);
     if (this.showTerrain) {
@@ -441,58 +441,30 @@ export class GameView {
         for (let x = vis.x0; x <= vis.x1; x++) this.drawTile(ctx, x, y);
       }
       ctx.restore();
-      this.washLand(ctx, g, vis);
-      this.washSea(ctx, g, vis);
+      this.markChannelGale(ctx, g, vis);
       blitCoast(ctx, coastOf(g.map), this.cam, this.vw, this.vh);
       return;
     }
-    this.washLand(ctx, g, vis);
-    this.washSea(ctx, g, vis);
+    this.markChannelGale(ctx, g, vis);
     blitCoast(ctx, playMarksOf(g.map), this.cam, this.vw, this.vh);
     drawTownMarks(ctx, g.towns);
   }
 
-  // Linen and wool over the photograph, so the land keeps the tapestry
-  // once the coast is crossed. Sea and the off-map cloth are left alone.
-  washLand(ctx, g, vis) {
-    for (let y = vis.y0; y <= vis.y1; y++) {
-      for (let x = vis.x0; x <= vis.x1; x++) {
-        const terr = terrainAt(gmap(g), x, y);
-        if (terr === TERRAIN.SEA || terr === TERRAIN.OUT) continue;
-        const px = x * TILE;
-        const py = y * TILE;
-        // Two coats. One pass at 0.75 still left the photograph in the land,
-        // and the sea stayed under 3:1 against it.
-        ctx.fillStyle = "rgba(232, 220, 192, 0.75)";
-        ctx.fillRect(px, py, TILE, TILE);
-        ctx.fillRect(px, py, TILE, TILE);
-        ctx.strokeStyle = "rgba(120, 78, 40, 0.16)";
-        ctx.lineWidth = 1;
-        ctx.beginPath();
-        const step = Math.max(5, TILE / 5);
-        for (let i = step * 0.5; i < TILE; i += step) {
-          ctx.moveTo(px, py + i);
-          ctx.lineTo(px + TILE, py + i);
-        }
-        ctx.stroke();
-      }
-    }
-  }
-
-  // Blue-green water in two dyes, laid in wavy bands. A gale darkens only the Channel
-  // squares a fleet cannot cross, and leaves the North Sea and Irish Sea.
-  // The Gale plate in the corner names the weather; this wash is the water.
-  washSea(ctx, g, vis) {
-    const gale = g.weather && g.weather.id === "gale";
+  // A gale closes only the Channel between the English south coast and
+  // Normandy. Those squares take a dark dye and wave strokes so the closure
+  // stays readable. Fair water, the North Sea, the Irish Sea, and the land
+  // stay as the relief or the terrain squares already drawn. The Gale plate
+  // in the corner names the weather.
+  markChannelGale(ctx, g, vis) {
+    if (!g.weather || g.weather.id !== "gale") return;
     const time = this.time || 0;
     const map = gmap(g);
     for (let y = vis.y0; y <= vis.y1; y++) {
       for (let x = vis.x0; x <= vis.x1; x++) {
-        if (terrainAt(map, x, y) !== TERRAIN.SEA) continue;
+        if (!channelCrossing(map, x, y)) continue;
         const px = x * TILE;
         const py = y * TILE;
-        const storm = gale && channelCrossing(map, x, y);
-        ctx.fillStyle = storm ? "rgba(16, 36, 64, 0.82)" : "#4f7a8a";
+        ctx.fillStyle = "rgba(16, 36, 64, 0.82)";
         ctx.fillRect(px, py, TILE, TILE);
         ctx.save();
         ctx.beginPath();
@@ -503,8 +475,8 @@ export class GameView {
         const bands = 3;
         for (let b = 0; b < bands; b++) {
           const base = py + TILE * ((b + 0.85) / (bands + 0.7));
-          const drift = storm ? (time * 14 + x * 4) % (TILE * 0.35) : (x + y) % 2;
-          ctx.strokeStyle = storm ? "rgba(111, 154, 140, 0.9)" : "#6f9a8c";
+          const drift = (time * 14 + x * 4) % (TILE * 0.35);
+          ctx.strokeStyle = "rgba(111, 154, 140, 0.9)";
           ctx.lineWidth = Math.max(2, TILE * 0.09);
           ctx.beginPath();
           ctx.moveTo(px - 2, base + drift);

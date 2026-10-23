@@ -1,4 +1,4 @@
-# Battle for Britain — agent notes
+# Hold the Isle — agent notes
 
 Static HTML/JS wargame. No Node, no bundler. Serve with `python -m http.server 8080`.
 
