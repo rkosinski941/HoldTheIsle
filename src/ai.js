@@ -1,4 +1,4 @@
-import { DIRS, englandLat, townByName } from "./world.js";
+import { DIRS, ENGLAND_LAT, TERRAIN, terrainAt, townByName } from "./world.js";
 import { displayPos, landUnitAt, living, pathToOrders, unitById } from "./engine.js";
 
 function nearest(game, units, x, y) {
@@ -37,18 +37,87 @@ function attackNearest(game, u, foes) {
   setToward(game, u, tp.x, tp.y);
 }
 
+// Same radius the southern fyrd already used once someone was "ashore".
+const THREAT_RADIUS = 10;
+// Harold passing through the shire. Three squares is a short march, not a campaign.
+const HAROLD_JOIN = 3;
+
+const FYRD_HOME = {
+  "London Fyrd": "London",
+  "Kent Fyrd": "Canterbury",
+  "Wessex Fyrd": "Winchester",
+  "East Anglian Fyrd": "Norwich",
+  "Mercia Fyrd": "Nottingham",
+  "Northumbrian Fyrd": "Durham",
+  "Gloucester Fyrd": "Gloucester",
+  "Oxford Fyrd": "Oxford",
+  "Lindsey Fyrd": "Lincoln",
+};
+
+// A land unit on English ground. Row 33 is the Channel; y >= 33 is the Norman
+// shore, and Eustace starts on its clear cell at 24,33. Ships, cargo, sea,
+// and river do not count.
+function onLandInEngland(game, u) {
+  if (!u || u.type === "fleet" || u.embarkedOn) return false;
+  const p = displayPos(game, u);
+  if (p.y >= ENGLAND_LAT) return false;
+  const terr = terrainAt(game.map, p.x, p.y);
+  return terr !== TERRAIN.SEA && terr !== TERRAIN.RIVER && terr !== TERRAIN.OUT;
+}
+
+function onEnglishLand(game, u) {
+  return !!u && u.side === "norman" && onLandInEngland(game, u);
+}
+
+// Home shire, unless a Norman or Norse land unit in England is inside the
+// threat radius. After the Normans have actually landed, a fyrd also falls in
+// if Harold passes within HAROLD_JOIN. Before that he is marching on York, and
+// following him would empty London on the opening week.
+function orderFyrd(game, u, williamLanded) {
+  const p = displayPos(game, u);
+  const foes = living(game).filter(
+    (f) => (f.side === "norman" || f.side === "norse") && onLandInEngland(game, f),
+  );
+  const threat = nearest(game, foes, p.x, p.y);
+  if (threat) {
+    const tp = displayPos(game, threat);
+    if (Math.abs(tp.x - p.x) + Math.abs(tp.y - p.y) <= THREAT_RADIUS) {
+      setToward(game, u, tp.x, tp.y);
+      return;
+    }
+  }
+  if (williamLanded) {
+    const harold = unitById(game, "harold");
+    if (harold && harold.alive && harold.type !== "fleet" && !harold.embarkedOn) {
+      const hp = displayPos(game, harold);
+      const d = Math.abs(hp.x - p.x) + Math.abs(hp.y - p.y);
+      if (d > 0 && d <= HAROLD_JOIN) {
+        setToward(game, u, hp.x, hp.y);
+        return;
+      }
+    }
+  }
+  const home = FYRD_HOME[u.name];
+  if (home) holdTown(game, u, home);
+}
+
+// Sticky. Once any Norman has stood on English land, later embarking does not
+// clear it. planAI and the fyrd-call both read this.
+export function noteNormansLanded(game) {
+  if (!game.flags) game.flags = {};
+  if (game.flags.normansLanded) return true;
+  if (living(game).some((u) => onEnglishLand(game, u))) game.flags.normansLanded = true;
+  return !!game.flags.normansLanded;
+}
+
 export function planAI(game) {
   const norse = living(game).filter((u) => u.side === "norse");
   const english = living(game).filter((u) => u.side === "english");
-  const normanLand = living(game).filter(
-    (u) => u.side === "norman" && u.type !== "fleet" && !u.embarkedOn && englandLat(u.y),
-  );
+  const normanLand = living(game).filter((u) => onEnglishLand(game, u));
   const york = game.towns.find((t) => t.name === "York");
   const london = game.towns.find((t) => t.name === "London");
-  const winchester = game.towns.find((t) => t.name === "Winchester");
-  const harold = unitById(game, "harold");
   const norseAlive = norse.some((u) => u.type !== "fleet");
-  const williamLanded = normanLand.length > 0;
+  const williamLanded = noteNormansLanded(game);
 
   for (const u of norse) {
     if (!u.alive) continue;
@@ -69,8 +138,21 @@ export function planAI(game) {
   }
 
   for (const u of english) {
+    if (u.type === "fyrd") {
+      orderFyrd(game, u, williamLanded);
+      continue;
+    }
+
     const north = u.region === "north" || u.id === "edwin" || u.id === "morcar";
     const royal = u.region === "royal" || u.id === "harold" || u.id === "gyrth" || u.id === "leofwine";
+
+    // A real landing outranks the Norse chase for the royal house only.
+    // Before that, Harold, Gyrth and Leofwine still march north.
+    if (royal && williamLanded) {
+      if (normanLand.length) attackNearest(game, u, normanLand);
+      else if (london) setToward(game, u, london.x, london.y);
+      continue;
+    }
 
     if (norseAlive && (north || royal)) {
       attackNearest(game, u, norse.filter((n) => n.type !== "fleet"));
@@ -78,30 +160,12 @@ export function planAI(game) {
     }
 
     if (williamLanded) {
-      if (u.type === "fyrd" && !north) {
-        const p = displayPos(game, u);
-        const threat = nearest(game, normanLand, p.x, p.y);
-        const home = u.id.includes("Wessex") || u.name.includes("Wessex") ? winchester : london;
-        if (threat && Math.abs(threat.x - p.x) + Math.abs(threat.y - p.y) <= 10) {
-          attackNearest(game, u, normanLand);
-        } else if (home) {
-          holdTown(game, u, home.name);
-        } else {
-          attackNearest(game, u, normanLand);
-        }
-      } else {
-        attackNearest(game, u, normanLand);
-      }
+      attackNearest(game, u, normanLand);
       continue;
     }
 
     if (north) holdTown(game, u, "York");
-    else if (u.name.includes("Kent") || u.name.includes("East Anglian")) holdTown(game, u, u.name.includes("Kent") ? "Canterbury" : "Norwich");
-    else if (royal && harold) {
-      holdTown(game, u, "London");
-    } else {
-      holdTown(game, u, "Winchester");
-    }
+    else if (royal) holdTown(game, u, "London");
   }
 
   // If a unit sits on an enemy, issue a dummy bump so combat still fires next turn
