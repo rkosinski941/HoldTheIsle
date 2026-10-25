@@ -269,6 +269,12 @@ button:hover:not(:disabled) {
 .scores .norse {
   color: #9eb4d0;
 }
+.scores .german {
+  color: #d7dbe0;
+}
+.scores .british {
+  color: #8fbfa4;
+}
 
 .unit {
   border: 1px solid rgba(212, 180, 90, 0.3);
@@ -285,6 +291,16 @@ button:hover:not(:disabled) {
 }
 .unit.norse {
   border-color: #243656;
+}
+.unit.german {
+  border-color: #8a9098;
+}
+.unit.british {
+  border-color: #1f4f3a;
+}
+
+#title.sealion .comet {
+  display: none;
 }
 
 .uname {

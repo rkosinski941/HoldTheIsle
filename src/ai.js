@@ -1,4 +1,4 @@
-import { DIRS, ENGLAND_LAT, TERRAIN, terrainAt, townByName } from "./world.js";
+import { DIRS, ENGLAND_LAT, TERRAIN, isAirType, terrainAt, townByName } from "./world.js";
 import { displayPos, landUnitAt, living, pathToOrders, unitById } from "./engine.js";
 
 function nearest(game, units, x, y) {
@@ -110,7 +110,115 @@ export function noteNormansLanded(game) {
   return !!game.flags.normansLanded;
 }
 
+export function noteGermansLanded(game) {
+  if (!game.flags) game.flags = {};
+  if (game.flags.germansLanded) return true;
+  if (living(game).some((u) => u.side === "german" && !isAirType(u.type) && onLandInEngland(game, u))) {
+    game.flags.germansLanded = true;
+  }
+  return !!game.flags.germansLanded;
+}
+
+function channelPatrol(game) {
+  const found = [];
+  for (let y = 29; y <= 32; y++) {
+    for (let x = 18; x <= 24; x++) {
+      if (terrainAt(game.map, x, y) === TERRAIN.SEA) found.push({ x, y });
+    }
+  }
+  if (!found.length) return null;
+  return found[Math.floor(found.length / 2)];
+}
+
+function adjacentDir(game, u, pred) {
+  const p = displayPos(game, u);
+  for (const [dir, [dx, dy]] of Object.entries(DIRS)) {
+    const occ = living(game).find((o) => {
+      if (o.id === u.id || o.embarkedOn || o.side === u.side) return false;
+      const op = displayPos(game, o);
+      return op.x === p.x + dx && op.y === p.y + dy && pred(o);
+    });
+    if (occ) return dir;
+  }
+  return null;
+}
+
+function planSealion(game) {
+  const british = living(game).filter((u) => u.side === "british");
+  const germans = living(game).filter((u) => u.side === "german");
+  const germanAir = germans.filter((u) => isAirType(u.type));
+  const germanFleet = germans.filter((u) => u.type === "fleet");
+  const germanLand = germans.filter((u) => onLandInEngland(game, u) && !isAirType(u.type));
+  const landed = noteGermansLanded(game);
+  const patrol = channelPatrol(game);
+
+  for (const u of british) {
+    if (u.type === "fighters") {
+      if (germanAir.length) attackNearest(game, u, germanAir);
+      else if (patrol) setToward(game, u, patrol.x, patrol.y);
+      continue;
+    }
+    if (u.type === "bombers") {
+      const targets = germanLand.length ? germanLand : germanFleet;
+      if (targets.length) attackNearest(game, u, targets);
+      continue;
+    }
+    if (u.type === "fleet") {
+      // Stay on the patrol line while the barges are in port. Hunt them once
+      // they are actually at sea, which is the turn after they sail.
+      const sailing = germanFleet.filter((f) => terrainAt(game.map, f.x, f.y) === TERRAIN.SEA);
+      if (sailing.length) attackNearest(game, u, sailing);
+      else if (patrol) setToward(game, u, patrol.x, patrol.y);
+      continue;
+    }
+    if (u.type === "home_guard" || u.role === "guard" || u.role === "crust") {
+      const p = displayPos(game, u);
+      const threat = nearest(game, germanLand, p.x, p.y);
+      const radius = u.role === "crust" ? 8 : 6;
+      if (threat) {
+        const tp = displayPos(game, threat);
+        if (Math.abs(tp.x - p.x) + Math.abs(tp.y - p.y) <= radius) {
+          setToward(game, u, tp.x, tp.y);
+          continue;
+        }
+      }
+      if (u.home) holdTown(game, u, u.home);
+      continue;
+    }
+    if (landed && germanLand.length) {
+      attackNearest(game, u, germanLand);
+      continue;
+    }
+    if (u.home) holdTown(game, u, u.home);
+  }
+
+  for (const u of british) {
+    if (u.orders.length) continue;
+    if (isAirType(u.type)) {
+      const dir = adjacentDir(game, u, (o) => isAirType(o.type) || (u.type === "bombers" && !isAirType(o.type)));
+      if (dir) u.orders = [dir];
+      continue;
+    }
+    if (u.type === "fleet") {
+      const dir = adjacentDir(game, u, (o) => o.type === "fleet");
+      if (dir) u.orders = [dir];
+      continue;
+    }
+    for (const [dir, [dx, dy]] of Object.entries(DIRS)) {
+      const occ = landUnitAt(game, u.x + dx, u.y + dy);
+      if (occ && occ.side !== u.side) {
+        u.orders = [dir];
+        break;
+      }
+    }
+  }
+}
+
 export function planAI(game) {
+  if (game.campaign === "1940") {
+    planSealion(game);
+    return;
+  }
   const norse = living(game).filter((u) => u.side === "norse");
   const english = living(game).filter((u) => u.side === "english");
   const normanLand = living(game).filter((u) => onEnglishLand(game, u));

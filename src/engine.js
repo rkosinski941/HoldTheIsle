@@ -1,14 +1,29 @@
-import { noteNormansLanded } from "./ai.js";
+import { noteGermansLanded, noteNormansLanded } from "./ai.js";
+import {
+  SEALION_BEACHHEADS,
+  SEALION_CALENDAR,
+  SEALION_CALLUPS,
+  SEALION_ID,
+  SEALION_OPENING,
+  SEALION_OWNERS,
+  SEALION_TURNS,
+  SEALION_UNITS,
+} from "./campaigns.js";
 import {
   DIRS,
+  ENGLAND_LAT,
   MAX_ORDERS,
   MOVE_COST,
   TERRAIN,
   TICKS_PER_TURN,
   TNAME,
   TURNS_TO_CHRISTMAS,
+  buildUnits,
   englandLat,
   inBounds,
+  isAirType,
+  isAirborneType,
+  isGroundType,
   isNavalTerrain,
   isPort,
   makeUnits,
@@ -32,7 +47,8 @@ function cloneTowns(towns) {
   return towns.map((t) => ({ ...t }));
 }
 
-export function createGame(map, difficulty = "normal", seed = 1066) {
+export function createGame(map, difficulty = "normal", seed = 1066, campaign = "1066") {
+  if (campaign === SEALION_ID) return createSealion(map, difficulty, seed);
   const game = {
     map,
     w: map.w,
@@ -53,6 +69,8 @@ export function createGame(map, difficulty = "normal", seed = 1066) {
     winner: null,
     score: 0,
     flash: [],
+    campaign: "1066",
+    playerSide: "norman",
   };
   const william = unitById(game, "william");
   if (william) {
@@ -65,7 +83,65 @@ export function createGame(map, difficulty = "normal", seed = 1066) {
   return game;
 }
 
+function createSealion(map, difficulty, seed) {
+  const towns = cloneTowns(map.towns);
+  for (const t of towns) {
+    if (SEALION_OWNERS[t.name]) t.owner = SEALION_OWNERS[t.name];
+  }
+  const game = {
+    map,
+    w: map.w,
+    h: map.h,
+    difficulty,
+    seed,
+    rng: mulberry32(seed),
+    turn: 0,
+    phase: "orders",
+    tick: 0,
+    weather: null,
+    units: buildUnits(map, SEALION_UNITS),
+    towns,
+    cursor: { x: 0, y: 0 },
+    selectedId: null,
+    log: [],
+    flags: { germansLanded: false },
+    winner: null,
+    score: 0,
+    flash: [],
+    campaign: SEALION_ID,
+    playerSide: "german",
+    calendar: { ...SEALION_CALENDAR },
+    maxTurns: SEALION_TURNS,
+    beachheads: SEALION_BEACHHEADS.slice(),
+    air: null,
+  };
+  const lead = unitById(game, "army16");
+  if (lead) {
+    game.cursor.x = lead.x;
+    game.cursor.y = lead.y;
+  }
+  applyDifficulty(game);
+  game.weather = rollWeather(game);
+  game.air = airBalance(game);
+  log(game, SEALION_OPENING);
+  return game;
+}
+
 function applyDifficulty(game) {
+  if (game.campaign === SEALION_ID) {
+    const mul = game.difficulty === "easy" ? 0.85 : game.difficulty === "hard" ? 1.15 : 1;
+    for (const u of game.units) {
+      if (u.side === "british") {
+        u.combat = Math.round(u.combat * mul);
+        u.muster = Math.round(u.muster * (mul > 1 ? 1.05 : mul < 1 ? 0.95 : 1));
+        u.maxMuster = u.muster;
+      }
+      if (u.side === "german" && game.difficulty === "easy" && isAirType(u.type)) {
+        u.combat = Math.round(u.combat * 1.12);
+      }
+    }
+    return;
+  }
   const mul = game.difficulty === "easy" ? 0.85 : game.difficulty === "hard" ? 1.15 : 1;
   for (const u of game.units) {
     if (u.side === "english") {
@@ -97,7 +173,7 @@ export function landUnitAt(game, x, y) {
   return (
     living(game).find((u) => {
       const p = displayPos(game, u);
-      return p.x === x && p.y === y && u.type !== "fleet" && !u.embarkedOn;
+      return p.x === x && p.y === y && u.type !== "fleet" && !isAirType(u.type) && !u.embarkedOn;
     }) || null
   );
 }
@@ -115,10 +191,11 @@ export function selectedUnit(game) {
 }
 
 export function dateOf(game) {
-  // 18 Sep 1066 + 4 days per turn
-  let day = 18 + game.turn * 4;
-  let month = 9;
-  let year = 1066;
+  // 1066 is 18 September, four days a turn. 1940 carries its own calendar.
+  const start = game.calendar || { day: 18, month: 9, year: 1066, daysPerTurn: 4 };
+  let day = start.day + game.turn * start.daysPerTurn;
+  let month = start.month;
+  let year = start.year;
   const mdays = [0, 31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
   while (day > mdays[month]) {
     day -= mdays[month];
@@ -184,15 +261,69 @@ export function moveCost(game, unit, x, y) {
     cost = Math.ceil(cost * game.weather.landMul);
   }
   if (!game.weather.cross && terr === TERRAIN.SEA) return 99;
+  if (game.campaign === SEALION_ID) cost = sealionMoveCost(game, unit, y, terr, cost);
   return cost;
+}
+
+// RAF superiority pins the barges. Luftwaffe superiority slows the British
+// columns in the south and eases the crossing. Gales are already impassable.
+function sealionMoveCost(game, unit, y, terr, cost) {
+  if (cost >= 90) return cost;
+  const air = game.air && game.air.id;
+  const germanSea = unit.side === "german" && (unit.type === "fleet" || unit.embarkedOn);
+  if (germanSea && terr === TERRAIN.SEA) {
+    if (air === "raf") return 99;
+    if (air === "contested") return Math.ceil(cost * 1.35);
+    if (air === "luftwaffe") return Math.ceil(cost * 0.85);
+  }
+  if (
+    air === "luftwaffe" &&
+    unit.side === "british" &&
+    !isAirType(unit.type) &&
+    unit.type !== "fleet" &&
+    y < ENGLAND_LAT &&
+    y >= 20 &&
+    terr !== TERRAIN.SEA &&
+    terr !== TERRAIN.RIVER
+  ) {
+    return Math.ceil(cost * 1.3);
+  }
+  return cost;
+}
+
+function fleetMayEnter(game, unit, x, y) {
+  const terr = terrainAt(game.map, x, y);
+  if (unit.side === "german") {
+    // Barges beach. They do not run the Thames up to London.
+    if (terr === TERRAIN.RIVER) return false;
+    if (isPort(game.map, x, y)) {
+      const town = townAt(game.map, x, y);
+      if (town && town.owner !== "german" && town.y < 28) return false;
+    }
+  }
+  if (unit.side === "british" && isPort(game.map, x, y)) {
+    const town = townAt(game.map, x, y);
+    if (town && town.owner === "german") return false;
+  }
+  return true;
 }
 
 export function canEnter(game, unit, x, y) {
   if (!inBounds(game.map, x, y)) return false;
   const terr = terrainAt(game.map, x, y);
   if (terr === TERRAIN.OUT) return false;
+  if (isAirType(unit.type)) {
+    if (terr === TERRAIN.SEA && game.weather && !game.weather.cross) return false;
+    return true;
+  }
+  if (isAirborneType(unit.type) && (terr === TERRAIN.SEA || terr === TERRAIN.RIVER)) {
+    if (game.weather && !game.weather.cross) return false;
+    if (game.campaign === SEALION_ID && unit.side === "german" && game.air && game.air.id === "raf") return false;
+    return moveCost(game, unit, x, y) < 90;
+  }
   if (unit.type === "fleet") {
     if (!isNavalTerrain(game.map, x, y)) return false;
+    if (game.campaign === SEALION_ID && !fleetMayEnter(game, unit, x, y)) return false;
     return moveCost(game, unit, x, y) < 90;
   }
   if (unit.embarkedOn) {
@@ -226,7 +357,7 @@ export function tryEmbark(game, unit, nx, ny) {
       f.side === unit.side &&
       Math.abs(f.x - unit.x) + Math.abs(f.y - unit.y) <= 1,
   );
-  const roomy = fleets.find((f) => cargoOf(game, f.id).length < 3);
+  const roomy = fleets.find((f) => cargoOf(game, f.id).length < (f.capacity == null ? 3 : f.capacity));
   if (!roomy) return false;
   unit.embarkedOn = roomy.id;
   unit.x = roomy.x;
@@ -266,7 +397,7 @@ export function pathToOrders(game, unit, tx, ty, limit = MAX_ORDERS) {
       const nx = cur.x + dx;
       const ny = cur.y + dy;
       if (!inBounds(game.map, nx, ny)) continue;
-      const occ = landUnitAt(game, nx, ny);
+      const occ = blockerAt(game, unit, nx, ny);
       const isDest = nx === tx && ny === ty;
       if (occ && occ.id !== unit.id && occ.side === unit.side && !isDest) continue;
       if (!isDest && occ && occ.side !== unit.side) continue;
@@ -309,8 +440,12 @@ export function orderPath(unit, game) {
   return pts;
 }
 
+export function playerSide(game) {
+  return game.playerSide || "norman";
+}
+
 export function pickUp(game, unit) {
-  if (!unit || !unit.alive || unit.side !== "norman") return;
+  if (!unit || !unit.alive || unit.side !== playerSide(game)) return;
   game.selectedId = unit.id;
   const p = orderPath(unit, game);
   const last = p[p.length - 1];
@@ -355,7 +490,8 @@ export function clearOrders(game, unit) {
 export function setPathTo(game, x, y) {
   const u = selectedUnit(game);
   if (!u || game.phase !== "orders") return;
-  const path = pathToOrders(game, u, x, y);
+  const crossing = planCrossing(game, u, x, y);
+  const path = crossing && crossing.length ? crossing : pathToOrders(game, u, x, y);
   if (u.embarkedOn) {
     const f = unitById(game, u.embarkedOn);
     if (f) f.orders = path;
@@ -382,14 +518,14 @@ export function moveCursor(game, dx, dy) {
 }
 
 export function cycleStack(game) {
-  const stack = unitsAt(game, game.cursor.x, game.cursor.y).filter((u) => u.side === "norman");
+  const stack = unitsAt(game, game.cursor.x, game.cursor.y).filter((u) => u.side === playerSide(game));
   if (!stack.length) return;
   const i = stack.findIndex((u) => u.id === game.selectedId);
   pickUp(game, stack[(i + 1) % stack.length]);
 }
 
 export function nextNorman(game) {
-  const mine = living(game).filter((u) => u.side === "norman");
+  const mine = living(game).filter((u) => u.side === playerSide(game));
   if (!mine.length) return;
   const i = mine.findIndex((u) => u.id === game.selectedId);
   const nxt = mine[(i + 1) % mine.length];
@@ -402,7 +538,7 @@ function breakThreshold(u) {
 
 function inSupply(game, u) {
   const pos = displayPos(game, u);
-  if (u.side === "norman" && !englandLat(pos.y)) return true;
+  if ((u.side === "norman" || u.side === "german") && !englandLat(pos.y)) return true;
   const sources = [];
   for (const t of game.towns) {
     if (t.owner === u.side) sources.push([t.x, t.y]);
@@ -414,6 +550,11 @@ function inSupply(game, u) {
   }
   if (u.side === "norse") {
     for (const f of living(game).filter((x) => x.side === "norse" && x.type === "fleet")) {
+      sources.push([f.x, f.y]);
+    }
+  }
+  if (u.side === "german") {
+    for (const f of living(game).filter((x) => x.side === "german" && x.type === "fleet")) {
       sources.push([f.x, f.y]);
     }
   }
@@ -432,7 +573,13 @@ function inSupply(game, u) {
       if (seen.has(k) || !inBounds(game.map, nx, ny)) continue;
       const terr = terrainAt(game.map, nx, ny);
       if (terr === TERRAIN.OUT) continue;
-      if (terr === TERRAIN.SEA && u.side !== "norman" && u.side !== "norse") continue;
+      if (terr === TERRAIN.SEA && u.side !== "norman" && u.side !== "norse" && u.side !== "german") continue;
+      if (u.side === "german") {
+        const block = living(game).some(
+          (f) => f.type === "fleet" && f.side !== "german" && f.x === nx && f.y === ny,
+        );
+        if (block) continue;
+      }
       const enemy = landUnitAt(game, nx, ny);
       if (enemy && enemy.side !== u.side) continue;
       seen.add(k);
@@ -452,6 +599,7 @@ function fight(game, a, b) {
     if (attacker && terr === TERRAIN.FOREST && atk.type === "knights") str = Math.floor(str * 0.7);
     if (attacker && atk.type === "archers") str = Math.floor(str * 1.12);
     if (!attacker && def.type === "housecarls") str = Math.floor(str * 1.1);
+    if (game.campaign === SEALION_ID) str = sealionStrike(game, str, atk, def, attacker);
     const p = Math.min(0.72, str / 240);
     if (game.rng() < p) {
       def.combat = Math.max(0, def.combat - 4);
@@ -482,6 +630,20 @@ function fight(game, a, b) {
 }
 
 function destroy(game, dead, killer) {
+  if (game.campaign === SEALION_ID && dead.type === "fleet") {
+    const lost = cargoOf(game, dead.id).slice();
+    const terr = terrainAt(game.map, dead.x, dead.y);
+    for (const c of lost) {
+      c.embarkedOn = null;
+      if (terr === TERRAIN.SEA || terr === TERRAIN.RIVER) {
+        c.alive = false;
+        c.muster = 0;
+        c.combat = 0;
+        c.orders = [];
+        log(game, `${c.name} is lost with ${dead.name}.`);
+      }
+    }
+  }
   dead.alive = false;
   dead.muster = 0;
   dead.combat = 0;
@@ -561,6 +723,7 @@ export function stepTick(game) {
       }
       continue;
     }
+    if (game.campaign === SEALION_ID && u.type === "fleet") unloadOnEnglishShore(game, u);
     if (!u.orders.length) continue;
     const dir = u.orders[0];
     const [dx, dy] = DIRS[dir] || [0, 0];
@@ -577,7 +740,7 @@ export function stepTick(game) {
       continue;
     }
 
-    const occ = landUnitAt(game, nx, ny);
+    const occ = blockerAt(game, u, nx, ny);
     if (occ && occ.id !== u.id && occ.side === u.side) {
       continue;
     }
@@ -587,7 +750,10 @@ export function stepTick(game) {
       continue;
     }
 
-    if (enemyZoc(game, u, from.x, from.y) && enemyZoc(game, u, nx, ny)) {
+    // A barge has to beach inside the defender's zone. Land ZOC would delete
+    // that order. 1066 fleets still obey it.
+    const fleetLanding = game.campaign === SEALION_ID && u.type === "fleet";
+    if (!isAirType(u.type) && !fleetLanding && enemyZoc(game, u, from.x, from.y) && enemyZoc(game, u, nx, ny)) {
       u.orders.shift();
       u.progress = 0;
       continue;
@@ -606,7 +772,7 @@ export function stepTick(game) {
         u.progress = 0;
         continue;
       }
-    } else if (u.type !== "fleet") {
+    } else if (u.type !== "fleet" && !isAirType(u.type) && !isAirborneType(u.type)) {
       const terr = terrainAt(game.map, nx, ny);
       if (terr === TERRAIN.SEA || terr === TERRAIN.RIVER) {
         if (tryEmbark(game, u, nx, ny)) {
@@ -636,6 +802,7 @@ export function stepTick(game) {
         c.x = nx;
         c.y = ny;
       }
+      if (game.campaign === SEALION_ID) unloadOnEnglishShore(game, u);
     }
     u.orders.shift();
     u.progress = 0;
@@ -651,6 +818,7 @@ function captureTowns(game) {
 }
 
 function englishLevies(game) {
+  if (game.campaign === SEALION_ID) return;
   // Same sticky test as planAI. Imported here so a landing during this week
   // is visible at upkeep, before the next orders phase.
   if (!noteNormansLanded(game)) return;
@@ -692,6 +860,7 @@ export function sideScore(game, side) {
 }
 
 export function checkVictory(game) {
+  if (game.campaign === SEALION_ID) return checkSealionVictory(game);
   const london = game.towns.find((t) => t.name === "London");
   const winch = game.towns.find((t) => t.name === "Winchester");
   const harold = unitById(game, "harold");
@@ -739,15 +908,21 @@ export function applyUpkeep(game) {
       if (game.rng() < 0.18) u.muster = Math.max(1, u.muster - 1);
       u.combat = Math.min(u.combat, u.muster * 4);
     }
+    if (supplied && game.campaign === SEALION_ID && u.side === "british" && u.type === "home_guard") {
+      u.muster = Math.min(u.maxMuster, u.muster + 1);
+    }
     if (u.fought) u.fatigue = Math.min(3, u.fatigue + 1);
     else u.fatigue = Math.max(0, u.fatigue - 1);
     if (u.broken && u.combat >= 12) u.broken = false;
   }
   englishLevies(game);
+  if (game.campaign === SEALION_ID) britishCallup(game);
   game.turn += 1;
   game.weather = rollWeather(game);
+  if (game.campaign === SEALION_ID) game.air = airBalance(game);
   const d = dateOf(game);
-  log(game, `${d.label}. ${game.weather.label}.`);
+  if (game.campaign === SEALION_ID) log(game, `${d.label}. ${game.weather.label}. ${game.air.label}.`);
+  else log(game, `${d.label}. ${game.weather.label}.`);
   if (checkVictory(game)) {
     game.phase = "ended";
     log(game, game.outcome);
@@ -755,6 +930,316 @@ export function applyUpkeep(game) {
   }
   game.phase = "orders";
   game.tick = 0;
+}
+
+function layerOf(unit) {
+  if (isAirType(unit.type)) return "air";
+  if (unit.type === "fleet") return "sea";
+  return "land";
+}
+
+// 1066 keeps land-only blocking. In 1940, ships fight ships and aircraft fight
+// aircraft. Bombers also strike whatever is on the ground or the water.
+export function blockerAt(game, mover, x, y) {
+  if (!mover || game.campaign !== SEALION_ID) return landUnitAt(game, x, y);
+  const layer = layerOf(mover);
+  const at = living(game).filter((u) => {
+    if (u.id === mover.id || u.embarkedOn) return false;
+    const p = displayPos(game, u);
+    return p.x === x && p.y === y;
+  });
+  const friendly = at.find((u) => u.side === mover.side && layerOf(u) === layer);
+  if (friendly) return friendly;
+  const enemy = at.find((u) => u.side !== mover.side && layerOf(u) === layer);
+  if (enemy) return enemy;
+  if (mover.type === "bombers") {
+    return at.find((u) => u.side !== mover.side && !isAirType(u.type)) || null;
+  }
+  return null;
+}
+
+function sealionStrike(game, str, atk, def, attacker) {
+  const at = terrainAt(game.map, atk.x, atk.y);
+  if (atk.type === "home_guard" && (at === TERRAIN.TOWN || at === TERRAIN.HILL)) {
+    str = Math.floor(str * 1.2);
+  }
+  if (!attacker) return str;
+  const dt = terrainAt(game.map, def.x, def.y);
+  if (atk.type === "panzers" && (dt === TERRAIN.FOREST || dt === TERRAIN.TOWN || dt === TERRAIN.MARSH)) {
+    str = Math.floor(str * 0.65);
+  }
+  if (atk.type === "panzers" && (dt === TERRAIN.CLEAR || dt === TERRAIN.ROAD)) {
+    str = Math.floor(str * 1.12);
+  }
+  if (atk.type === "fighters" && isAirType(def.type)) str = Math.floor(str * 1.35);
+  if (atk.type === "fighters" && !isAirType(def.type)) str = Math.floor(str * 0.45);
+  if (atk.type === "bombers" && !isAirType(def.type)) str = Math.floor(str * 1.3);
+  if (atk.type === "bombers" && isAirType(def.type)) str = Math.floor(str * 0.65);
+  if (atk.type === "fleet" && def.type === "fleet" && atk.side === "british") str = Math.floor(str * 1.25);
+  if (game.air && game.air.id === "luftwaffe" && atk.side === "german" && isGroundType(atk.type)) {
+    str = Math.floor(str * 1.1);
+  }
+  if (
+    game.air &&
+    game.air.id === "raf" &&
+    atk.side === "german" &&
+    isGroundType(atk.type) &&
+    atk.type !== "fleet" &&
+    atk.y < ENGLAND_LAT
+  ) {
+    str = Math.floor(str * 0.85);
+  }
+  return str;
+}
+
+export function airBalance(game) {
+  let german = 0;
+  let british = 0;
+  for (const u of living(game)) {
+    if (!isAirType(u.type)) continue;
+    const weight = (u.type === "bombers" ? 0.35 : 1) * (u.broken ? 0.5 : 1);
+    const strength = u.combat * weight;
+    if (u.side === "german") german += strength;
+    else if (u.side === "british") british += strength;
+  }
+  if (german > british * 1.2 && german > 0) return { id: "luftwaffe", label: "Luftwaffe superiority" };
+  if (british > german * 1.15 && british > 0) return { id: "raf", label: "RAF superiority" };
+  return { id: "contested", label: "Contested skies" };
+}
+
+function southCoastLanding(game, x, y) {
+  if (y >= ENGLAND_LAT) return false;
+  const terr = terrainAt(game.map, x, y);
+  if (terr === TERRAIN.BEACH) return true;
+  if (!isPort(game.map, x, y)) return false;
+  const town = townAt(game.map, x, y);
+  return !!(town && town.y >= 28);
+}
+
+function unloadOnEnglishShore(game, fleet) {
+  if (!southCoastLanding(game, fleet.x, fleet.y)) return;
+  const cargo = cargoOf(game, fleet.id).filter((c) => isGroundType(c.type) && c.type !== "fleet");
+  if (!cargo.length) return;
+  const spots = [];
+  const consider = (x, y) => {
+    if (!inBounds(game.map, x, y) || y >= ENGLAND_LAT) return;
+    if (landUnitAt(game, x, y)) return;
+    const terr = terrainAt(game.map, x, y);
+    if (terr === TERRAIN.SEA || terr === TERRAIN.RIVER || terr === TERRAIN.OUT) return;
+    spots.push({ x, y });
+  };
+  consider(fleet.x, fleet.y);
+  for (const [dx, dy] of Object.values(DIRS)) consider(fleet.x + dx, fleet.y + dy);
+  let landed = 0;
+  for (const c of cargo) {
+    const spot = spots.shift();
+    if (!spot) break;
+    c.embarkedOn = null;
+    c.x = spot.x;
+    c.y = spot.y;
+    c.orders = [];
+    landed += 1;
+  }
+  if (landed) log(game, `${fleet.name} puts ${landed === 1 ? "a unit" : landed + " units"} ashore.`);
+}
+
+function shoreTargets(game) {
+  const out = [];
+  for (let y = 0; y < game.h; y++) {
+    for (let x = 0; x < game.w; x++) {
+      if (southCoastLanding(game, x, y)) out.push({ x, y });
+    }
+  }
+  return out;
+}
+
+function nearestReachableShore(game, fleet, tx, ty) {
+  let best = null;
+  let bestScore = 1e9;
+  for (const s of shoreTargets(game)) {
+    if (fleet.x === s.x && fleet.y === s.y) return s;
+    const orders = pathToOrders(game, fleet, s.x, s.y);
+    if (!orders.length) continue;
+    const score = orders.length * 2 + Math.abs(s.x - tx) + Math.abs(s.y - ty);
+    if (score < bestScore) {
+      bestScore = score;
+      best = { ...s, orders };
+    }
+  }
+  return best;
+}
+
+function landApproach(game, unit, tx, ty) {
+  const start = displayPos(game, unit);
+  const key = (x, y) => x + "," + y;
+  const q = [{ x: start.x, y: start.y, path: [] }];
+  const seen = new Set([key(start.x, start.y)]);
+  while (q.length) {
+    const cur = q.shift();
+    if (cur.x === tx && cur.y === ty) return cur.path;
+    if (cur.path.length >= MAX_ORDERS) continue;
+    for (const [dir, [dx, dy]] of Object.entries(DIRS)) {
+      const nx = cur.x + dx;
+      const ny = cur.y + dy;
+      const k = key(nx, ny);
+      if (seen.has(k) || !inBounds(game.map, nx, ny)) continue;
+      const terr = terrainAt(game.map, nx, ny);
+      const isTarget = nx === tx && ny === ty;
+      if (!isTarget) {
+        if (terr === TERRAIN.SEA || terr === TERRAIN.RIVER || terr === TERRAIN.OUT) continue;
+        const occ = landUnitAt(game, nx, ny);
+        if (occ && occ.id !== unit.id && occ.side === unit.side) continue;
+      }
+      seen.add(k);
+      q.push({ x: nx, y: ny, path: cur.path.concat(dir) });
+    }
+  }
+  return null;
+}
+
+function seaBeside(game, x, y) {
+  const out = [];
+  const here = terrainAt(game.map, x, y);
+  if (here === TERRAIN.SEA || here === TERRAIN.RIVER) out.push({ x, y });
+  for (const [dx, dy] of Object.values(DIRS)) {
+    const nx = x + dx;
+    const ny = y + dy;
+    const terr = terrainAt(game.map, nx, ny);
+    if (terr === TERRAIN.SEA || terr === TERRAIN.RIVER) out.push({ x: nx, y: ny });
+  }
+  return out;
+}
+
+function transportFleets(game, side) {
+  return living(game).filter((f) => {
+    if (f.side !== side || f.type !== "fleet") return false;
+    const cap = f.capacity == null ? 3 : f.capacity;
+    return cap > cargoOf(game, f.id).length;
+  });
+}
+
+// Clicking an English square from France plots the embarkation and the
+// barge's run to the nearest beach. Arrow keys still lay the orders by hand.
+function planCrossing(game, unit, tx, ty) {
+  if (game.campaign !== SEALION_ID || isAirType(unit.type)) return null;
+  const start = displayPos(game, unit);
+  if (unit.type === "fleet" || unit.embarkedOn) {
+    const fleet = unit.type === "fleet" ? unit : unitById(game, unit.embarkedOn);
+    if (!fleet) return null;
+    const terr = terrainAt(game.map, tx, ty);
+    const held = landUnitAt(game, tx, ty);
+    const open = !held || held.side === fleet.side;
+    const direct =
+      open &&
+      (terr === TERRAIN.SEA ||
+        terr === TERRAIN.BEACH ||
+        (isPort(game.map, tx, ty) && fleetMayEnter(game, fleet, tx, ty)));
+    if (direct) {
+      const orders = pathToOrders(game, fleet, tx, ty);
+      if (orders.length) return orders;
+    }
+    const shore = nearestReachableShore(game, fleet, tx, ty);
+    return shore && shore.orders && shore.orders.length ? shore.orders : null;
+  }
+  if (isAirborneType(unit.type)) return null;
+  if (!(start.y >= ENGLAND_LAT && ty < ENGLAND_LAT)) return null;
+  const fleets = transportFleets(game, unit.side);
+  if (!fleets.length) return null;
+  let best = null;
+  for (const fleet of fleets) {
+    const shore = nearestReachableShore(game, fleet, tx, ty);
+    if (!shore || !shore.orders || !shore.orders.length) continue;
+    for (const sea of seaBeside(game, fleet.x, fleet.y)) {
+      const approach = landApproach(game, unit, sea.x, sea.y);
+      if (!approach) continue;
+      const orders = approach.concat(shore.orders).slice(0, MAX_ORDERS);
+      if (orders.length <= approach.length) continue;
+      const score = approach.length + shore.orders.length + Math.abs(shore.x - tx) + Math.abs(shore.y - ty);
+      if (!best || score < best.score) best = { orders, score };
+    }
+  }
+  return best ? best.orders : null;
+}
+
+function holdsLodgement(game) {
+  const names = game.beachheads || SEALION_BEACHHEADS;
+  let n = 0;
+  for (const name of names) {
+    const town = game.towns.find((t) => t.name === name);
+    if (town && town.owner === "german") n += 1;
+  }
+  return n >= 2;
+}
+
+function germanArmyAlive(game) {
+  return living(game).some((u) => u.side === "german" && isGroundType(u.type) && u.type !== "fleet");
+}
+
+function checkSealionVictory(game) {
+  const london = game.towns.find((t) => t.name === "London");
+  const londonHeld = london && london.owner === "german";
+  let beach = 0;
+  for (const name of game.beachheads || SEALION_BEACHHEADS) {
+    const town = game.towns.find((t) => t.name === name);
+    if (town && town.owner === "german") beach += 1;
+  }
+  game.score = sideScore(game, "german") + (londonHeld ? 25 : 0) + beach * 5;
+  if (londonHeld) {
+    game.winner = "german";
+    game.outcome = "London has fallen. Operation Sea Lion is ashore, and the capital is in German hands.";
+    return true;
+  }
+  if (game.turn > 0 && !germanArmyAlive(game)) {
+    game.winner = "british";
+    game.outcome = "The invasion army is gone. Britain holds the isle.";
+    return true;
+  }
+  if (game.turn >= (game.maxTurns || SEALION_TURNS)) {
+    const d = dateOf(game);
+    if (holdsLodgement(game)) {
+      game.winner = "german";
+      game.outcome = `${d.label}. The beachhead still holds. The lodgement has survived the autumn.`;
+    } else {
+      game.winner = "british";
+      game.outcome = `${d.label}. No lodgement remains. The Narrow Seas have closed, and Sea Lion is postponed.`;
+    }
+    return true;
+  }
+  return false;
+}
+
+function britishCallup(game) {
+  if (!noteGermansLanded(game)) return;
+  const call = SEALION_CALLUPS.find((c) => c.turn === game.turn);
+  if (!call) return;
+  const town = townByName({ towns: game.towns }, call.town);
+  if (!town || town.owner !== "british") return;
+  if (landUnitAt(game, town.x, town.y)) return;
+  game.units.push({
+    id: "hg" + game.turn,
+    name: call.name,
+    side: "british",
+    type: "home_guard",
+    x: town.x,
+    y: town.y,
+    muster: 11,
+    combat: 36,
+    maxMuster: 12,
+    orders: [],
+    progress: 0,
+    broken: false,
+    fatigue: 0,
+    fought: false,
+    embarkedOn: null,
+    region: "south",
+    home: town.name,
+    role: "guard",
+    flash: 0,
+    alive: true,
+    supplied: true,
+    index: game.units.length,
+  });
+  log(game, `${call.name} musters at ${town.name}.`);
 }
 
 export function tileInfo(game, x, y) {
