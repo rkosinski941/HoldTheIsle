@@ -55,6 +55,13 @@ export const MOVE_COST = {
   fyrd: [99, 7, 7, 10, 9, 14, 12, 5, 6, 99],
   huscarls: [99, 6, 6, 8, 8, 12, 10, 4, 5, 99],
   fleet: [3, 4, 99, 99, 99, 99, 4, 99, 4, 99],
+  // 1940. Panzers are quick on roads and clumsy in towns, woods, and marsh.
+  // Fighters and bombers fly. Fallschirm can cross the sea without a fleet.
+  panzers: [99, 4, 3, 14, 7, 16, 8, 2, 5, 99],
+  fighters: [2, 2, 2, 2, 2, 2, 2, 2, 2, 99],
+  bombers: [3, 3, 3, 3, 3, 3, 3, 3, 3, 99],
+  fallschirm: [4, 5, 5, 8, 7, 12, 8, 4, 5, 99],
+  home_guard: [99, 7, 7, 9, 8, 14, 12, 5, 6, 99],
 };
 
 export const TYPE_LABEL = {
@@ -65,13 +72,32 @@ export const TYPE_LABEL = {
   fyrd: "Fyrd",
   huscarls: "Huscarls",
   fleet: "Fleet",
+  panzers: "Panzers",
+  fighters: "Fighters",
+  bombers: "Bombers",
+  fallschirm: "Fallschirmjäger",
+  home_guard: "Home Guard",
 };
 
 export const SIDE_LABEL = {
   norman: "Norman",
   english: "English",
   norse: "Norse",
+  german: "German",
+  british: "British",
 };
+
+export function isAirType(type) {
+  return type === "fighters" || type === "bombers";
+}
+
+export function isAirborneType(type) {
+  return type === "fallschirm";
+}
+
+export function isGroundType(type) {
+  return type !== "fleet" && !isAirType(type);
+}
 
 export async function loadMap() {
   const res = await fetch("data/map.json");
@@ -154,8 +180,43 @@ function spec(id, name, side, type, town, muster, combat, opts = {}) {
   return { id, name, side, type, town, muster, combat, ...opts };
 }
 
-export function makeUnits(map) {
+export function buildUnits(map, raw) {
   const taken = new Set();
+  return raw.map((s, i) => {
+    const town = townByName(map, s.town);
+    const ox = (town ? town.x : 20) + (s.dx || 0);
+    const oy = (town ? town.y : 20) + (s.dy || 0);
+    const pos = placeNear(map, taken, ox, oy, s.naval || s.type === "fleet");
+    const unit = {
+      id: s.id,
+      name: s.name,
+      side: s.side,
+      type: s.type,
+      x: pos.x,
+      y: pos.y,
+      muster: s.muster,
+      combat: s.combat,
+      maxMuster: s.muster,
+      orders: [],
+      progress: 0,
+      broken: false,
+      fatigue: 0,
+      fought: false,
+      embarkedOn: null,
+      region: s.region || null,
+      home: s.home || s.town || null,
+      role: s.role || null,
+      flash: 0,
+      alive: true,
+      supplied: true,
+      index: i,
+    };
+    if (s.capacity != null) unit.capacity = s.capacity;
+    return unit;
+  });
+}
+
+export function makeUnits(map) {
   const raw = [
     spec("william", "William", "norman", "knights", "St-Valery", 32, 160),
     spec("odo", "Odo of Bayeux", "norman", "knights", "Bayeux", 18, 90),
@@ -188,35 +249,7 @@ export function makeUnits(map) {
     spec("nhusc2", "Orkney Men", "norse", "huscarls", "York", 14, 65, { dx: -1, dy: 1 }),
     spec("nfleet", "Norse Fleet", "norse", "fleet", "York", 18, 36, { naval: true }),
   ];
-
-  return raw.map((s, i) => {
-    const town = townByName(map, s.town);
-    const ox = (town ? town.x : 20) + (s.dx || 0);
-    const oy = (town ? town.y : 20) + (s.dy || 0);
-    const pos = placeNear(map, taken, ox, oy, s.naval || s.type === "fleet");
-    return {
-      id: s.id,
-      name: s.name,
-      side: s.side,
-      type: s.type,
-      x: pos.x,
-      y: pos.y,
-      muster: s.muster,
-      combat: s.combat,
-      maxMuster: s.muster,
-      orders: [],
-      progress: 0,
-      broken: false,
-      fatigue: 0,
-      fought: false,
-      embarkedOn: null,
-      region: s.region || null,
-      flash: 0,
-      alive: true,
-      supplied: true,
-      index: i,
-    };
-  });
+  return buildUnits(map, raw);
 }
 
 export const TICKS_PER_TURN = 32;

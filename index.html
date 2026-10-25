@@ -23,13 +23,20 @@
           <circle cx="108" cy="92" r="22" fill="none" stroke="#8e1b28" stroke-width="2" stroke-dasharray="3 2" />
           <path d="M108 64 V120 M80 92 H136 M88 72 L128 112 M128 72 L88 112" fill="none" stroke="#24180f" stroke-width="2" stroke-linecap="round" />
         </svg>
-        <figcaption>Halley's star, seen over England, April 1066</figcaption>
+        <figcaption id="comet-caption">Halley's star, seen over England, April 1066</figcaption>
       </figure>
       <div class="veil">
-        <p class="kicker">Anno Domini MLXVI</p>
+        <p class="kicker" id="title-kicker">Anno Domini MLXVI</p>
         <h1>Hold the Isle</h1>
-        <p class="sub">The Year of Three Kings- 1066</p>
-        <p class="tag">A scrolling campaign in the manner of Chris Crawford’s Eastern Front</p>
+        <p class="sub" id="title-sub">The Year of Three Kings- 1066</p>
+        <p class="tag" id="title-tag">A scrolling campaign in the manner of Chris Crawford’s Eastern Front</p>
+        <label class="diff">
+          Campaign
+          <select id="campaign">
+            <option value="1066" selected>The Year of Three Kings- 1066</option>
+            <option value="1940">Operation Sea Lion- 1940</option>
+          </select>
+        </label>
         <label class="diff">
           Difficulty
           <select id="diff">
@@ -48,19 +55,36 @@
     <div id="howto" class="modal" hidden>
       <div class="panel">
         <h2>How to play</h2>
-        <p>
-          You are William, Duke of Normandy. Issue orders to your host, then execute the week. English and Norse
-          orders resolve at the same time as yours.
-        </p>
-        <ul>
-          <li>Move the pink cursor with the arrow keys or WASD. The map scrolls at the edges of the screen.</li>
-          <li>Enter picks up a Norman unit. Further arrow keys plot up to eight marching orders. Enter puts it down.</li>
-          <li>Click a unit, then click a destination, to plot a path. Backspace undoes one order; Space clears them.</li>
-          <li>T (or Execute week) runs thirty-two ticks of movement and combat. Space skips the animation.</li>
-          <li>March a land unit onto a friendly fleet at the coast to embark. Order it onto an English beach to land.</li>
-          <li>Gales close the Channel. Harold will march north on Hardrada first. That is your opening.</li>
-          <li>Hold London, and Winchester or Harold’s death, before Christmas.</li>
-        </ul>
+        <div id="help-1066">
+          <p>
+            You are William, Duke of Normandy. Issue orders to your host, then execute the week. English and Norse
+            orders resolve at the same time as yours.
+          </p>
+          <ul>
+            <li>Move the pink cursor with the arrow keys or WASD. The map scrolls at the edges of the screen.</li>
+            <li>Enter picks up a Norman unit. Further arrow keys plot up to eight marching orders. Enter puts it down.</li>
+            <li>Click a unit, then click a destination, to plot a path. Backspace undoes one order; Space clears them.</li>
+            <li>T (or Execute week) runs thirty-two ticks of movement and combat. Space skips the animation.</li>
+            <li>March a land unit onto a friendly fleet at the coast to embark. Order it onto an English beach to land.</li>
+            <li>Gales close the Channel. Harold will march north on Hardrada first. That is your opening.</li>
+            <li>Hold London, and Winchester or Harold’s death, before Christmas.</li>
+          </ul>
+        </div>
+        <div id="help-1940" hidden>
+          <p>
+            You command the German invasion, 15 September 1940. Each turn is four days. Britain moves when you do.
+            The barges cannot sail while Fighter Command holds the air, and the Royal Navy hunts them once they leave port.
+          </p>
+          <ul>
+            <li>Enter picks up a German unit. Arrows plot up to eight orders. T executes the turn. Space skips the animation.</li>
+            <li>Click a unit in France, then a beach or a south-coast town, to plot the crossing. The flotilla carries the troops.</li>
+            <li>Troops step ashore when the barges reach a beach or a south-coast port. 7th Flieger can cross without ships.</li>
+            <li>Fighters contest the sky. The air situation for the next turn is the balance after this one. Bombers strike ships and troops.</li>
+            <li>Gales close the Channel. RAF superiority keeps German barges and paratroops from crossing. Contested skies make the crossing slow.</li>
+            <li>Ramsay’s destroyers will not enter a German port, but they will fight barges at sea and in the harbor mouth.</li>
+            <li>Take London, or still hold two of Dover, Canterbury, Hastings, Pevensey, and Chichester on 10 November. Otherwise Britain wins.</li>
+          </ul>
+        </div>
         <button id="close-help">To the map</button>
       </div>
     </div>

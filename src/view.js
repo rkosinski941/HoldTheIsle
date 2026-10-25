@@ -1,3 +1,4 @@
+import { SEALION_HELP } from "./campaigns.js";
 import { DIR_KEYS, SIDE_LABEL, TERRAIN, TYPE_LABEL, terrainAt } from "./world.js";
 import {
   beginResolve,
@@ -12,6 +13,7 @@ import {
   nextNorman,
   orderPath,
   pickUp,
+  playerSide,
   putDown,
   selectedUnit,
   setPathTo,
@@ -59,6 +61,8 @@ const SIDE_COL = {
   norman: { fill: "#b5462e", ink: "#f6efe0", edge: "#4a1c14" },
   english: { fill: "#c9a640", ink: "#1a120c", edge: "#3d3414" },
   norse: { fill: "#1a3a6b", ink: "#e7eef8", edge: "#d5e2f2" },
+  german: { fill: "#5e666e", ink: "#f4f1e8", edge: "#1c2126" },
+  british: { fill: "#1f4f3a", ink: "#f4f0e4", edge: "#d4b45a" },
 };
 
 // Cell size is chosen in resize() so the board covers the pane beside the
@@ -253,7 +257,7 @@ export class GameView {
     if (x < 0 || y < 0 || x >= this.game.w || y >= this.game.h) return;
     this.game.cursor.x = x;
     this.game.cursor.y = y;
-    const stack = unitsAt(this.game, x, y).filter((u) => u.side === "norman");
+    const stack = unitsAt(this.game, x, y).filter((u) => u.side === playerSide(this.game));
     if (this.game.phase === "orders" && this.game.selectedId) {
       if (stack.length && stack[0].id === this.game.selectedId) {
         putDown(this.game);
@@ -299,7 +303,7 @@ export class GameView {
     }
     if (e.key === "Enter") {
       e.preventDefault();
-      const stack = unitsAt(this.game, this.game.cursor.x, this.game.cursor.y).filter((u) => u.side === "norman");
+      const stack = unitsAt(this.game, this.game.cursor.x, this.game.cursor.y).filter((u) => u.side === playerSide(this.game));
       if (this.game.selectedId) {
         if (stack.length > 1) cycleStack(this.game);
         else putDown(this.game);
@@ -409,6 +413,7 @@ export class GameView {
     this.drawNorthThreat(ctx);
     this.drawMeteors(ctx);
     this.drawGaleLabel(ctx);
+    this.drawAirLabel(ctx);
     this.drawMinimap(ctx);
     if (this.help) this.drawHelp(ctx);
   }
@@ -529,9 +534,9 @@ export class GameView {
   drawOrders(ctx) {
     const g = this.game;
     for (const u of living(g)) {
-      if (u.side !== "norman" && u.id !== g.selectedId) continue;
+      if (u.side !== playerSide(g) && u.id !== g.selectedId) continue;
       if (!u.orders.length) continue;
-      const col = u.side === "norman" ? "rgba(232, 196, 90, 0.9)" : "rgba(200,220,255,0.7)";
+      const col = u.side === playerSide(g) ? "rgba(232, 196, 90, 0.9)" : "rgba(200,220,255,0.7)";
       const pts = orderPath(u, g).map((p) => ({
         x: p.x * TILE + TILE / 2,
         y: p.y * TILE + TILE / 2,
@@ -636,7 +641,7 @@ export class GameView {
     ctx.textBaseline = "middle";
     const tw = ctx.measureText(num).width;
     const nx = px + w * 0.5;
-    const ny = u.side === "norman" ? py + h - fs * 0.52 : py + h * 0.58;
+    const ny = u.side === playerSide(this.game) ? py + h - fs * 0.52 : py + h * 0.58;
     ctx.fillStyle = "rgba(12, 8, 6, 0.72)";
     roundRect(ctx, nx - tw / 2 - 3, ny - fs * 0.46, tw + 6, fs * 0.92, 3);
     ctx.fill();
@@ -682,6 +687,7 @@ export class GameView {
   // York stays in the opening frame when it fits. A short pane still names
   // the army above the edge, so the northern threat is not a surprise.
   drawNorthThreat(ctx) {
+    if (this.game.campaign === "1940") return;
     const york = this.game.towns.find((t) => t.name === "York");
     if (!york) return;
     const top = this.cam.y / TILE;
@@ -700,6 +706,28 @@ export class GameView {
     ctx.textAlign = "left";
     ctx.textBaseline = "middle";
     ctx.fillText("↑  " + text, x + 8, y + 14);
+    ctx.restore();
+  }
+
+  drawAirLabel(ctx) {
+    if (this.game.campaign !== "1940" || !this.game.air) return;
+    const id = this.game.air.id;
+    if (id === "contested") return;
+    const text = id === "raf" ? "RAF holds the air" : "Luftwaffe over the Channel";
+    const y = this.game.weather && this.game.weather.id === "gale" ? 56 : 16;
+    ctx.save();
+    ctx.font = "700 16px Palatino Linotype, Palatino, serif";
+    const tw = ctx.measureText(text).width;
+    const x = 16;
+    ctx.fillStyle = id === "raf" ? "rgba(18, 42, 32, 0.92)" : "rgba(36, 40, 44, 0.92)";
+    ctx.fillRect(x, y, tw + 28, 32);
+    ctx.strokeStyle = id === "raf" ? "#d4b45a" : "#f4f1e8";
+    ctx.lineWidth = 2;
+    ctx.strokeRect(x + 1, y + 1, tw + 26, 30);
+    ctx.fillStyle = "#f4ead4";
+    ctx.textAlign = "left";
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, x + 14, y + 16);
     ctx.restore();
   }
 
@@ -855,25 +883,29 @@ export class GameView {
   }
 
   drawHelp(ctx) {
+    const lines =
+      this.game.campaign === "1940"
+        ? SEALION_HELP
+        : [
+            "Orders first, then all sides move at once.",
+            "Arrows / WASD  move the cursor (and plot orders if a unit is held)",
+            "Enter  pick up or put down a Norman unit",
+            "Click a unit, then click a destination, to plot a path",
+            "Backspace  cancel last order    Space  clear orders",
+            "N  next Norman unit             T  execute the week",
+            "G  terrain plate — movement colors over the relief",
+            "Right-click  clear orders",
+            "March to a fleet on the coast, then order into the sea to embark.",
+            "Gale turns close the Channel. Land while Harold is in the north.",
+          ];
+    const boxH = 370 + Math.max(0, lines.length - 10) * 28;
     ctx.fillStyle = "rgba(10,8,6,0.82)";
-    ctx.fillRect(this.vw / 2 - 250, 40, 500, 370);
+    ctx.fillRect(this.vw / 2 - 250, 40, 500, boxH);
     ctx.strokeStyle = PAL.gold;
-    ctx.strokeRect(this.vw / 2 - 250, 40, 500, 370);
+    ctx.strokeRect(this.vw / 2 - 250, 40, 500, boxH);
     ctx.fillStyle = PAL.cream;
     ctx.font = "16px Palatino Linotype, Palatino, serif";
     ctx.textAlign = "left";
-    const lines = [
-      "Orders first, then all sides move at once.",
-      "Arrows / WASD  move the cursor (and plot orders if a unit is held)",
-      "Enter  pick up or put down a Norman unit",
-      "Click a unit, then click a destination, to plot a path",
-      "Backspace  cancel last order    Space  clear orders",
-      "N  next Norman unit             T  execute the week",
-      "G  terrain plate — movement colors over the relief",
-      "Right-click  clear orders",
-      "March to a fleet on the coast, then order into the sea to embark.",
-      "Gale turns close the Channel. Land while Harold is in the north.",
-    ];
     lines.forEach((ln, i) => ctx.fillText(ln, this.vw / 2 - 230, 80 + i * 28));
   }
 
@@ -899,25 +931,37 @@ export class GameView {
         </div>`
       : `<div class="unit"><div class="uname">No unit</div><div class="umeta">${info.terr}${info.town ? " · " + info.town.name : ""}</div></div>`;
 
+    const sealion = g.campaign === "1940";
+    const kicker = sealion ? "September 1940" : "Anno Domini MLXVI";
+    const turnLimit = g.maxTurns || 24;
+    const airStat = sealion && g.air ? `<div><label>Air</label>${esc(g.air.label)}</div>` : "";
+    const scores = sealion
+      ? `<span class="german">German ${sideScore(g, "german")}</span><span class="british">British ${sideScore(g, "british")}</span>`
+      : `<span class="norman">Norman ${sideScore(g, "norman")}</span>
+        <span class="english">English ${sideScore(g, "english")}</span>
+        <span class="norse">Norse ${sideScore(g, "norse")}</span>`;
+    const executeLabel = sealion ? "Execute turn (T)" : "Execute week (T)";
+    const hint = sealion
+      ? "You command the invasion. Take London, or hold two of Dover, Canterbury, Hastings, Pevensey and Chichester on 10 November."
+      : "You are William. Take London, and Winchester or Harold's life, before Christmas.";
     this.hud.innerHTML = `
       <div class="brand">
-        <div class="kicker">Anno Domini MLXVI</div>
+        <div class="kicker">${kicker}</div>
         <h2>Hold the Isle</h2>
       </div>
       <div class="statline">
         <div><label>Date</label>${d.label}</div>
-        <div><label>Turn</label>${g.turn + 1} / 24</div>
+        <div><label>Turn</label>${g.turn + 1} / ${turnLimit}</div>
         <div><label>Weather</label>${g.weather.label}</div>
         <div><label>Phase</label>${phase}</div>
+        ${airStat}
       </div>
       <div class="scores">
-        <span class="norman">Norman ${sideScore(g, "norman")}</span>
-        <span class="english">English ${sideScore(g, "english")}</span>
-        <span class="norse">Norse ${sideScore(g, "norse")}</span>
+        ${scores}
       </div>
       ${audioMarkup()}
       <div class="btns">
-        <button id="endturn" ${g.phase !== "orders" ? "disabled" : ""}>Execute week (T)</button>
+        <button id="endturn" ${g.phase !== "orders" ? "disabled" : ""}>${executeLabel}</button>
         <button id="nextu">Next unit (N)</button>
         <button id="terrain" class="ghost">${this.showTerrain ? "Relief map (G)" : "Terrain plate (G)"}</button>
       </div>
@@ -933,7 +977,7 @@ export class GameView {
       ${unitBlock}
       <div class="tile">Tile ${g.cursor.x},${g.cursor.y} · ${info.terr}${info.town ? " · " + info.town.name + " (" + info.town.owner + ")" : ""}</div>
       <ol class="log">${formatLogLines(g).map((l) => `<li>${esc(l)}</li>`).join("")}</ol>
-      <p class="hint">? help · You are William. Take London, and Winchester or Harold's life, before Christmas.</p>
+      <p class="hint">? help · ${hint}</p>
     `;
     const end = this.hud.querySelector("#endturn");
     const nxt = this.hud.querySelector("#nextu");
@@ -953,7 +997,7 @@ export class GameView {
     const hold = this.hud.querySelector("#pickup");
     if (hold)
       hold.onclick = () => {
-        const stack = unitsAt(g, g.cursor.x, g.cursor.y).filter((u) => u.side === "norman");
+        const stack = unitsAt(g, g.cursor.x, g.cursor.y).filter((u) => u.side === playerSide(g));
         if (g.selectedId) putDown(g);
         else if (stack.length) pickUp(g, stack[0]);
         this.paintHud();
@@ -1064,8 +1108,15 @@ function keepLabelOnScreen(lab, camY) {
   return { ...lab, x, y, leader: true, ...labelBox(x, y, width, px) };
 }
 
+function ownerInk(owner, mark) {
+  if (owner === "norman" || owner === "german") return "#8e1b28";
+  if (owner === "norse") return "#243656";
+  if (owner === "british") return "#16382c";
+  return mark ? "#1c1814" : "#3a3a3a";
+}
+
 function traceCounter(ctx, side, x, y, w, h) {
-  if (side === "english") {
+  if (side === "english" || side === "british") {
     roundRect(ctx, x, y, w, h, Math.min(w, h) * 0.5);
     return;
   }
@@ -1365,7 +1416,7 @@ function drawTownMarks(ctx, towns) {
     const cy = t.y * TILE + TILE / 2;
     ctx.beginPath();
     ctx.arc(cx, cy, Math.max(4, TILE * 0.14), 0, Math.PI * 2);
-    ctx.fillStyle = t.owner === "norman" ? "#8e1b28" : t.owner === "norse" ? "#243656" : "#1c1814";
+    ctx.fillStyle = ownerInk(t.owner, true);
     ctx.fill();
     ctx.lineWidth = 1.5;
     ctx.strokeStyle = "#e6c86a";
@@ -1580,7 +1631,7 @@ function drawTileAt(ctx, map, towns, x, y, time) {
   if (t === TERRAIN.TOWN) {
     const town = towns.find((tw) => tw.x === x && tw.y === y);
     const owner = town ? town.owner : "english";
-    ctx.fillStyle = owner === "norman" ? "#8e1b28" : owner === "norse" ? "#243656" : "#3a3a3a";
+    ctx.fillStyle = ownerInk(owner, false);
     ctx.fillRect(px + 7, py + 12, 8, 12);
     ctx.fillRect(px + 17, py + 10, 9, 14);
     ctx.fillStyle = "#c9b48a";
@@ -1753,6 +1804,14 @@ function datePhrase(week) {
 // Newest first, same as the log. An event belongs to the next older date
 // line, because the week is recorded after the fighting.
 function formatLogLines(game) {
+  if (game.campaign === "1940") {
+    const out = [];
+    for (const line of game.log) {
+      if (out.length && out[out.length - 1] === line) continue;
+      out.push(line);
+    }
+    return out;
+  }
   const raw = game.log;
   const out = [];
   let sawOrionids = false;
@@ -1948,6 +2007,20 @@ function drawEmblem(ctx, side, x, y, size, ink) {
     const t = size * 0.2;
     ctx.fillRect(size / 2 - t / 2, size * 0.08, t, size * 0.84);
     ctx.fillRect(size * 0.1, size * 0.38, size * 0.8, t);
+  } else if (side === "german") {
+    const t = size * 0.18;
+    ctx.fillRect(size / 2 - t / 2, size * 0.12, t, size * 0.76);
+    ctx.fillRect(size * 0.12, size / 2 - t / 2, size * 0.76, t);
+  } else if (side === "british") {
+    ctx.beginPath();
+    ctx.arc(size * 0.5, size * 0.5, size * 0.36, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(size * 0.5, size * 0.5, size * 0.2, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(size * 0.5, size * 0.5, size * 0.07, 0, Math.PI * 2);
+    ctx.fill();
   } else if (side === "english") {
     ctx.beginPath();
     ctx.moveTo(size * 0.18, size * 0.72);
@@ -2047,7 +2120,47 @@ function drawTypeIcon(ctx, type, x, y, w, h, ink) {
     ctx.quadraticCurveTo(w * 0.62, h * 0.36, w * 0.38, h * 0.46);
     ctx.closePath();
     ctx.fill();
-  } else if (type === "fyrd") {
+  } else if (type === "panzers") {
+    ctx.fillRect(w * 0.12, h * 0.42, w * 0.62, h * 0.28);
+    ctx.fillRect(w * 0.28, h * 0.22, w * 0.28, h * 0.24);
+    ctx.fillRect(w * 0.5, h * 0.3, w * 0.28, h * 0.08);
+    ctx.beginPath();
+    ctx.moveTo(w * 0.16, h * 0.78);
+    ctx.lineTo(w * 0.7, h * 0.78);
+    ctx.stroke();
+  } else if (type === "fighters") {
+    ctx.beginPath();
+    ctx.moveTo(w * 0.5, h * 0.06);
+    ctx.lineTo(w * 0.5, h * 0.94);
+    ctx.moveTo(w * 0.08, h * 0.42);
+    ctx.lineTo(w * 0.92, h * 0.42);
+    ctx.moveTo(w * 0.32, h * 0.78);
+    ctx.lineTo(w * 0.5, h * 0.62);
+    ctx.lineTo(w * 0.68, h * 0.78);
+    ctx.stroke();
+  } else if (type === "bombers") {
+    ctx.beginPath();
+    ctx.moveTo(w * 0.5, h * 0.08);
+    ctx.lineTo(w * 0.5, h * 0.92);
+    ctx.moveTo(w * 0.06, h * 0.48);
+    ctx.lineTo(w * 0.94, h * 0.48);
+    ctx.moveTo(w * 0.28, h * 0.8);
+    ctx.lineTo(w * 0.72, h * 0.8);
+    ctx.stroke();
+    ctx.fillRect(w * 0.22, h * 0.4, w * 0.1, h * 0.16);
+    ctx.fillRect(w * 0.68, h * 0.4, w * 0.1, h * 0.16);
+  } else if (type === "fallschirm") {
+    ctx.beginPath();
+    ctx.arc(w * 0.5, h * 0.34, Math.min(w, h) * 0.28, Math.PI, 0);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(w * 0.24, h * 0.34);
+    ctx.lineTo(w * 0.5, h * 0.78);
+    ctx.lineTo(w * 0.76, h * 0.34);
+    ctx.moveTo(w * 0.4, h * 0.78);
+    ctx.lineTo(w * 0.6, h * 0.78);
+    ctx.stroke();
+  } else if (type === "fyrd" || type === "home_guard") {
     ctx.beginPath();
     ctx.arc(w * 0.34, h * 0.58, Math.min(w, h) * 0.26, 0, Math.PI * 2);
     ctx.stroke();
