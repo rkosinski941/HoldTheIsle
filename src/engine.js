@@ -220,7 +220,16 @@ export function dateOf(game) {
     "November",
     "December",
   ];
-  return { day, month, year, label: `${day} ${names[month]} ${year}` };
+  return { day, month, year, monthName: names[month], label: `${day} ${names[month]} ${year}` };
+}
+
+// The orders phase shows the turn you are about to play. Upkeep increments
+// the counter before the campaign-ended screen, so that screen must not add
+// one again (that was the 15/14 readout).
+export function displayTurn(game) {
+  const limit = game.maxTurns || TURNS_TO_CHRISTMAS;
+  const n = game.phase === "ended" ? game.turn : game.turn + 1;
+  return Math.max(1, Math.min(limit, n));
 }
 
 const WEATHERS = [
@@ -459,10 +468,19 @@ export function putDown(game) {
 
 export function addOrder(game, dir) {
   const u = selectedUnit(game);
-  if (!u || game.phase !== "orders") return;
+  if (!u || game.phase !== "orders") return false;
   const target = u.embarkedOn ? unitById(game, u.embarkedOn) || u : u;
-  if (target.orders.length >= MAX_ORDERS) return;
+  if (target.orders.length >= MAX_ORDERS) return false;
+  const step = DIRS[dir];
+  if (!step) return false;
+  const last = orderPath(target, game).at(-1);
+  const nx = last.x + step[0];
+  const ny = last.y + step[1];
+  // The grey margin is not a destination. Refusing it here keeps the plot
+  // off those tiles; movement rules for sea, beach, and ports are unchanged.
+  if (!inBounds(game.map, nx, ny) || terrainAt(game.map, nx, ny) === TERRAIN.OUT) return false;
   target.orders.push(dir);
+  return true;
 }
 
 export function cancelLast(game) {
@@ -489,9 +507,11 @@ export function clearOrders(game, unit) {
 
 export function setPathTo(game, x, y) {
   const u = selectedUnit(game);
-  if (!u || game.phase !== "orders") return;
+  if (!u || game.phase !== "orders") return false;
+  if (!inBounds(game.map, x, y) || terrainAt(game.map, x, y) === TERRAIN.OUT) return false;
   const crossing = planCrossing(game, u, x, y);
   const path = crossing && crossing.length ? crossing : pathToOrders(game, u, x, y);
+  if (pathCrossesOut(game, u, path)) return false;
   if (u.embarkedOn) {
     const f = unitById(game, u.embarkedOn);
     if (f) f.orders = path;
@@ -503,18 +523,39 @@ export function setPathTo(game, x, y) {
   const last = p[p.length - 1];
   game.cursor.x = last.x;
   game.cursor.y = last.y;
+  return true;
+}
+
+function pathCrossesOut(game, unit, orders) {
+  const target = unit.embarkedOn ? unitById(game, unit.embarkedOn) || unit : unit;
+  let { x, y } = displayPos(game, target);
+  for (const d of orders) {
+    const step = DIRS[d];
+    if (!step) return true;
+    x += step[0];
+    y += step[1];
+    if (!inBounds(game.map, x, y) || terrainAt(game.map, x, y) === TERRAIN.OUT) return true;
+  }
+  return false;
 }
 
 export function moveCursor(game, dx, dy) {
   const nx = game.cursor.x + dx;
   const ny = game.cursor.y + dy;
   if (!inBounds(game.map, nx, ny)) return;
+  const ordering = game.selectedId && game.phase === "orders";
+  if (ordering) {
+    if (terrainAt(game.map, nx, ny) === TERRAIN.OUT) return;
+    const dir = Object.entries(DIRS).find(([, v]) => v[0] === dx && v[1] === dy);
+    if (dir) {
+      const u = selectedUnit(game);
+      const target = u && u.embarkedOn ? unitById(game, u.embarkedOn) || u : u;
+      const full = !!(target && target.orders.length >= MAX_ORDERS);
+      if (!addOrder(game, dir[0]) && !full) return;
+    }
+  }
   game.cursor.x = nx;
   game.cursor.y = ny;
-  if (game.selectedId && game.phase === "orders") {
-    const dir = Object.entries(DIRS).find(([, v]) => v[0] === dx && v[1] === dy);
-    if (dir) addOrder(game, dir[0]);
-  }
 }
 
 export function cycleStack(game) {
