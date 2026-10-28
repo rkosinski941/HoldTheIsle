@@ -87,9 +87,11 @@ export const SEALION_OPENING =
 export const SEALION_HELP = [
   "Orders first, then all sides move at once.",
   "Arrows / WASD plot orders while a German unit is held.",
-  "Enter picks up or puts down. N cycles your units. T runs the turn.",
-  "Click a unit, then a beach or a town, to plot a path.",
+  "N picks up the next unit. Enter puts it down; orders stay.",
+  "Click a friendly unit to select it. Click ground to plot.",
   "Backspace undoes one order. Space clears them.",
+  "T runs the turn. T again skips it. Release T after.",
+  "Grey margin squares are out of play and refuse orders.",
   "March onto a flotilla, then across the sea onto a beach to land.",
   "7th Flieger can cross without barges. Gales ground the air and the sea.",
   "RAF superiority keeps the barges in port. Win the air, then sail.",
