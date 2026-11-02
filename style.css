@@ -40,7 +40,9 @@ select {
 
 #title {
   position: relative;
-  overflow: hidden;
+  overflow-x: hidden;
+  overflow-y: auto;
+  align-items: safe center;
 }
 
 .comet {
@@ -137,6 +139,35 @@ select {
   gap: 12px;
   justify-content: center;
   flex-wrap: wrap;
+}
+
+.joy-credit {
+  margin: 26px 0 0;
+  display: flex;
+  justify-content: center;
+}
+
+.joy-credit a {
+  display: inline-block;
+  line-height: 0;
+  border-radius: 5px;
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.08), 0 8px 18px rgba(0, 0, 0, 0.35);
+}
+
+.joy-credit a:hover {
+  filter: brightness(1.06);
+}
+
+.joy-credit a:focus-visible {
+  outline: 2px solid var(--gold);
+  outline-offset: 3px;
+}
+
+.joy-credit img {
+  display: block;
+  width: 239px;
+  max-width: 100%;
+  height: auto;
 }
 
 button {
@@ -399,5 +430,15 @@ button:hover:not(:disabled) {
   }
   .log {
     max-height: 18vh;
+  }
+  .veil {
+    width: min(720px, calc(100% - 24px));
+    padding: 28px 18px 24px;
+  }
+  .tag {
+    margin-bottom: 20px;
+  }
+  .joy-credit {
+    margin-top: 20px;
   }
 }
