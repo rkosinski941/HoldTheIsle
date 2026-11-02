@@ -1,5 +1,7 @@
 # Hold the Isle
 
+<a href="https://enjoy.dev"><img src="assets/engineered-with-joy-avatar-large@2x.png" alt="Engineered with JOY" height="32"></a>
+
 **Hold the Isle** is a scrolling, turn-based campaign in the manner of Chris Crawford’s *Eastern Front (1941)*. Two campaigns share the Channel map:
 
 - **The Year of Three Kings- 1066.** You are William of Normandy. Harald Hardrada is already in Yorkshire. Harold Godwinson holds London.
