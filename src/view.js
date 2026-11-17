@@ -7,6 +7,7 @@ import {
   cycleStack,
   dateOf,
   displayPos,
+  displayTurn,
   landUnitAt,
   living,
   moveCursor,
@@ -84,6 +85,8 @@ export class GameView {
     this.resolveAcc = 0;
     this.help = false;
     this.showTerrain = false;
+    this.followCursor = true;
+    this.turnKeyLatched = false;
     this.dpr = 1;
     this.hover = null;
     this.viewW = 0;
@@ -91,10 +94,16 @@ export class GameView {
     this.resize = this.resize.bind(this);
     this.loop = this.loop.bind(this);
     this.onKey = this.onKey.bind(this);
+    this.onKeyUp = this.onKeyUp.bind(this);
     this.onClick = this.onClick.bind(this);
     this.onMove = this.onMove.bind(this);
+    this.onBlur = () => {
+      this.turnKeyLatched = false;
+    };
     window.addEventListener("resize", this.resize);
     window.addEventListener("keydown", this.onKey);
+    window.addEventListener("keyup", this.onKeyUp);
+    window.addEventListener("blur", this.onBlur);
     canvas.addEventListener("click", this.onClick);
     canvas.addEventListener("mousemove", this.onMove);
     canvas.addEventListener("contextmenu", (e) => {
@@ -120,6 +129,8 @@ export class GameView {
     syncGale(false);
     window.removeEventListener("resize", this.resize);
     window.removeEventListener("keydown", this.onKey);
+    window.removeEventListener("keyup", this.onKeyUp);
+    window.removeEventListener("blur", this.onBlur);
   }
 
   rememberBoard() {
@@ -169,6 +180,9 @@ export class GameView {
     const hudW = this.hud ? this.hud.getBoundingClientRect().width : 0;
     const viewW = Math.max(160, w - hudW);
     const first = this.viewW === 0;
+    const prevTile = TILE;
+    const prevViewW = this.viewW;
+    const prevH = this.vh;
     this.dpr = Math.min(2, window.devicePixelRatio || 1);
     this.canvas.width = Math.floor(w * this.dpr);
     this.canvas.height = Math.floor(h * this.dpr);
@@ -184,9 +198,11 @@ export class GameView {
       playMemo = null;
       coastMemo = null;
     }
+    // Keep the cell that was in the middle. Re-reading the camera with the
+    // new tile size sent the French ports off the bottom in a wide window.
     const focus = first
-      ? openingCenter(h)
-      : { x: (this.cam.x + viewW / 2) / TILE, y: (this.cam.y + h / 2) / TILE };
+      ? openingCenter(h, this.game)
+      : { x: (this.cam.x + prevViewW / 2) / prevTile, y: (this.cam.y + prevH / 2) / prevTile };
     this.centerOnCell(focus.x, focus.y, true);
   }
 
@@ -213,6 +229,9 @@ export class GameView {
   // The opening frame stays on the Channel. The map pans only when the
   // cursor walks to the edge of the pane, which is what the help promises.
   keepInView() {
+    // A click already landed on a tile the player can see. Panning afterwards
+    // moves that tile out from under the next click (about one margin, ~35px).
+    if (!this.followCursor) return;
     const m = TILE * 1.2;
     const left = this.game.cursor.x * TILE - this.cam.x;
     const top = this.game.cursor.y * TILE - this.cam.y;
@@ -255,17 +274,26 @@ export class GameView {
     if (this.game.phase === "ended") return;
     const { x, y } = this.tileFromEvent(e);
     if (x < 0 || y < 0 || x >= this.game.w || y >= this.game.h) return;
-    this.game.cursor.x = x;
-    this.game.cursor.y = y;
+    this.followCursor = false;
+    if (this.game.phase !== "orders") {
+      this.game.cursor.x = x;
+      this.game.cursor.y = y;
+      this.paintHud();
+      return;
+    }
     const stack = unitsAt(this.game, x, y).filter((u) => u.side === playerSide(this.game));
-    if (this.game.phase === "orders" && this.game.selectedId) {
-      if (stack.length && stack[0].id === this.game.selectedId) {
-        putDown(this.game);
-      } else {
-        setPathTo(this.game, x, y);
-      }
-    } else if (stack.length) {
-      pickUp(this.game, stack[0]);
+    if (stack.length) {
+      this.game.cursor.x = x;
+      this.game.cursor.y = y;
+      const heldAt = stack.findIndex((u) => u.id === this.game.selectedId);
+      if (heldAt >= 0 && stack.length === 1) putDown(this.game);
+      else if (heldAt >= 0) pickUp(this.game, stack[(heldAt + 1) % stack.length]);
+      else pickUp(this.game, stack[0]);
+    } else if (this.game.selectedId) {
+      setPathTo(this.game, x, y);
+    } else {
+      this.game.cursor.x = x;
+      this.game.cursor.y = y;
     }
     this.paintHud();
   }
@@ -288,7 +316,9 @@ export class GameView {
     }
     if (this.game.phase === "ended") return;
     if (this.game.phase === "resolve") {
-      if (e.key === " " || e.key === "Escape" || e.key === "t" || e.key === "T") {
+      if (e.key === " " || e.key === "Escape" || e.key === "t" || e.key === "T" || e.key === "End") {
+        // Holding T used to keep firing after the skip and start the next turn.
+        if (e.key === "t" || e.key === "T" || e.key === "End") this.turnKeyLatched = true;
         this.skipResolve = true;
       }
       return;
@@ -296,6 +326,7 @@ export class GameView {
     const dir = DIR_KEYS[e.key];
     if (dir) {
       e.preventDefault();
+      this.followCursor = true;
       const [dx, dy] = { N: [0, -1], S: [0, 1], E: [1, 0], W: [-1, 0] }[dir];
       moveCursor(this.game, dx, dy);
       this.paintHud();
@@ -326,15 +357,22 @@ export class GameView {
       return;
     }
     if (e.key === "n" || e.key === "N") {
+      this.followCursor = true;
       nextNorman(this.game);
       this.centerOnCursor(false);
       this.paintHud();
       return;
     }
     if (e.key === "t" || e.key === "T" || e.key === "End") {
+      if (e.repeat || this.turnKeyLatched) return;
       e.preventDefault();
+      this.turnKeyLatched = true;
       this.startResolve();
     }
+  }
+
+  onKeyUp(e) {
+    if (e.key === "t" || e.key === "T" || e.key === "End") this.turnKeyLatched = false;
   }
 
   startResolve() {
@@ -912,15 +950,17 @@ export class GameView {
   paintHud() {
     const g = this.game;
     const d = dateOf(g);
-    const sel = selectedUnit(g) || landUnitAt(g, g.cursor.x, g.cursor.y) || unitsAt(g, g.cursor.x, g.cursor.y)[0];
+    const sel = hudUnit(g);
     const mover = sel && sel.embarkedOn ? unitById(g, sel.embarkedOn) || sel : sel;
     const info = tileInfo(g, g.cursor.x, g.cursor.y);
     const phase =
       g.phase === "orders" ? "Issue orders" : g.phase === "resolve" ? `Resolving tick ${g.tick}/32` : "Campaign ended";
+    const pos = sel ? displayPos(g, sel) : null;
     const unitBlock = sel
       ? `<div class="unit ${sel.side}">
           <div class="uname">${esc(sel.name)}</div>
           <div class="umeta">${SIDE_LABEL[sel.side]} · ${TYPE_LABEL[sel.type]}${g.selectedId === sel.id ? " · HELD" : ""}${sel.broken ? " · BROKEN" : ""}${sel.embarkedOn ? " · embarked" : ""}</div>
+          <div class="upos">Unit tile ${pos.x},${pos.y}</div>
           <div class="bars">
             <span>Muster ${sel.muster}</span>
             <span>Combat ${sel.combat}</span>
@@ -929,10 +969,10 @@ export class GameView {
           </div>
           <div class="orders">Orders: ${mover.orders.length ? mover.orders.join(" ") : "hold"}</div>
         </div>`
-      : `<div class="unit"><div class="uname">No unit</div><div class="umeta">${info.terr}${info.town ? " · " + info.town.name : ""}</div></div>`;
+      : `<div class="unit"><div class="uname">No unit</div><div class="umeta">${info.terr}${info.town ? " · " + info.town.name : ""}</div><div class="upos"></div><div class="orders">Orders: hold</div></div>`;
 
     const sealion = g.campaign === "1940";
-    const kicker = sealion ? "September 1940" : "Anno Domini MLXVI";
+    const kicker = sealion ? `${d.monthName} ${d.year}` : "Anno Domini MLXVI";
     const turnLimit = g.maxTurns || 24;
     const airStat = sealion && g.air ? `<div><label>Air</label>${esc(g.air.label)}</div>` : "";
     const scores = sealion
@@ -951,7 +991,7 @@ export class GameView {
       </div>
       <div class="statline">
         <div><label>Date</label>${d.label}</div>
-        <div><label>Turn</label>${g.turn + 1} / ${turnLimit}</div>
+        <div><label>Turn</label>${displayTurn(g)} / ${turnLimit}</div>
         <div><label>Weather</label>${g.weather.label}</div>
         <div><label>Phase</label>${phase}</div>
         ${airStat}
@@ -975,7 +1015,7 @@ export class GameView {
         <button id="dirS" class="ghost">S</button>
       </div>
       ${unitBlock}
-      <div class="tile">Tile ${g.cursor.x},${g.cursor.y} · ${info.terr}${info.town ? " · " + info.town.name + " (" + info.town.owner + ")" : ""}</div>
+      <div class="tile">Cursor ${g.cursor.x},${g.cursor.y} · ${info.terr}${info.town ? " · " + info.town.name + " (" + info.town.owner + ")" : ""}</div>
       <ol class="log">${formatLogLines(g).map((l) => `<li>${esc(l)}</li>`).join("")}</ol>
       <p class="hint">? help · ${hint}</p>
     `;
@@ -990,6 +1030,7 @@ export class GameView {
       };
     if (nxt)
       nxt.onclick = () => {
+        this.followCursor = true;
         nextNorman(g);
         this.centerOnCursor(false);
         this.paintHud();
@@ -1006,6 +1047,7 @@ export class GameView {
       const el = this.hud.querySelector(id);
       if (el)
         el.onclick = () => {
+          this.followCursor = true;
           moveCursor(g, dx, dy);
           this.refreshHudBits();
         };
@@ -1019,22 +1061,40 @@ export class GameView {
 
   refreshHudBits() {
     const g = this.game;
-    const sel = selectedUnit(g) || landUnitAt(g, g.cursor.x, g.cursor.y) || unitsAt(g, g.cursor.x, g.cursor.y)[0];
+    const sel = hudUnit(g);
     const mover = sel && sel.embarkedOn ? unitById(g, sel.embarkedOn) || sel : sel;
     const orders = this.hud.querySelector(".orders");
     const tile = this.hud.querySelector(".tile");
     const umeta = this.hud.querySelector(".umeta");
+    const uname = this.hud.querySelector(".uname");
+    const upos = this.hud.querySelector(".upos");
+    if (uname) uname.textContent = sel ? sel.name : "No unit";
     if (orders) {
       orders.textContent = mover && mover.orders.length ? "Orders: " + mover.orders.join(" ") : "Orders: hold";
     }
+    if (upos) {
+      if (sel) {
+        const pos = displayPos(g, sel);
+        upos.textContent = `Unit tile ${pos.x},${pos.y}`;
+      } else upos.textContent = "";
+    }
     if (tile) {
       const info = tileInfo(g, g.cursor.x, g.cursor.y);
-      tile.textContent = `Tile ${g.cursor.x},${g.cursor.y} · ${info.terr}${info.town ? " · " + info.town.name + " (" + info.town.owner + ")" : ""}`;
+      tile.textContent = `Cursor ${g.cursor.x},${g.cursor.y} · ${info.terr}${info.town ? " · " + info.town.name + " (" + info.town.owner + ")" : ""}`;
     }
     if (umeta && sel) {
       umeta.textContent = `${SIDE_LABEL[sel.side]} · ${TYPE_LABEL[sel.type]}${g.selectedId === sel.id ? " · HELD" : ""}${sel.broken ? " · BROKEN" : ""}${sel.embarkedOn ? " · embarked" : ""}`;
     }
   }
+}
+
+// The held unit owns the panel. The cursor tile is only a fallback when
+// nothing is held, so plotting does not replace the selection with whatever
+// square the pink cursor has walked to.
+function hudUnit(g) {
+  const held = selectedUnit(g);
+  if (held && held.alive && held.muster > 0) return held;
+  return landUnitAt(g, g.cursor.x, g.cursor.y) || unitsAt(g, g.cursor.x, g.cursor.y)[0] || null;
 }
 
 // Names prefer the space just above their own town. Neighbours a cell apart
@@ -1049,8 +1109,19 @@ function labelPx() {
   return Math.max(15, Math.round(TILE * 0.42));
 }
 
-// York through the Norman ports. A short pane pins York to the top.
-function openingCenter(vh) {
+// 1066: York through the Norman ports. A short pane pins York to the top.
+// 1940: the army is in France. A short or wide pane pins the ports, and the
+// center is shifted so those rows sit above the minimap.
+function openingCenter(vh, game) {
+  if (game && game.campaign === "1940") {
+    const miniPx = game.h * 2 + 28;
+    const visible = Math.max(1, (vh - miniPx) / TILE);
+    const top = 27;
+    const bottom = 41;
+    const focus = visible >= bottom - top ? (top + bottom) / 2 : bottom - visible / 2;
+    const shift = miniPx / TILE / 2;
+    return { x: CHANNEL_X, y: focus + shift };
+  }
   const top = 14.4;
   const bottom = 39.2;
   const visible = Math.max(1, vh / TILE);

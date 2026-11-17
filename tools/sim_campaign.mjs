@@ -8,7 +8,9 @@ import {
   checkVictory,
   createGame,
   dateOf,
+  displayTurn,
   living,
+  moveCursor,
   pickUp,
   setPathTo,
   stepTick,
@@ -108,6 +110,7 @@ const combats = new Map(sea.units.map((u) => [u.id, u.combat]));
 for (let i = 0; i < 4; i++) week(sea);
 assert(sea.turn === 4, "turn advanced to " + sea.turn);
 assert(dateOf(sea).label === "1 October 1940", "date after four turns " + dateOf(sea).label);
+assert(dateOf(sea).monthName === "October", "month header follows the date");
 assert(sea.phase === "orders", "back to orders");
 const fought =
   sea.units.some((u) => u.combat !== combats.get(u.id)) ||
@@ -192,7 +195,30 @@ let guard = 0;
 while (end.phase !== "ended" && guard++ < 20) week(end);
 assert(end.winner === "british", "holding without a landing should lose, got " + end.winner);
 assert(end.phase === "ended", "campaign ended");
+assert(end.turn === 14, "deadline falls on turn 14, got " + end.turn);
+assert(displayTurn(end) === 14, "ended campaign shows 14, not 15");
 console.log("  outcome:", end.outcome);
+
+console.log("— orders UI guards —");
+const margin = createGame(map, "normal", 11, "1940");
+assert(displayTurn(margin) === 1 && dateOf(margin).monthName === "September", "opening caption");
+const host = unitById(margin, "army16");
+assert(terrainAt(margin.map, 24, 32) === TERRAIN.OUT, "24,32 is the grey margin");
+pickUp(margin, host);
+moveCursor(margin, 0, -1);
+assert(host.orders.length === 0 && margin.cursor.y === host.y, "no plot onto the margin");
+moveCursor(margin, 0, 1);
+assert(host.orders.join("") === "S", "a step onto the port still plots");
+assert(setPathTo(margin, 24, 32) === false, "clicking the margin does not plot");
+assert(host.orders.join("") === "S", "a refused click leaves the plot in place");
+const sunk = unitById(margin, "flot-e");
+sunk.alive = false;
+sunk.muster = 0;
+assert(!living(margin).some((u) => u.id === sunk.id), "destroyed flotilla is off the living list");
+const xmas = createGame(map, "normal", 1066);
+xmas.turn = 24;
+xmas.phase = "ended";
+assert(displayTurn(xmas) === 24, "1066 ending does not read 25/24");
 
 if (failed) {
   console.error(`\n${failed} check(s) failed`);

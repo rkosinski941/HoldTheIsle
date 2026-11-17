@@ -339,6 +339,7 @@ button:hover:not(:disabled) {
 }
 
 .umeta,
+.upos,
 .tile,
 .orders,
 .hint {
